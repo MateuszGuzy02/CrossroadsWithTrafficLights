@@ -1,0 +1,23 @@
+### Ignoruj foldery buildów i pliki tymczasowe
+x64/
+x86/
+Debug/
+Release/
+*.obj
+*.pdb
+*.exe
+*.ilk
+*.log
+*.user
+*.suo
+*.cache
+packages/
+.vscode/
+*.VC.db
+*.ipch/
+*.tlog/
+*.opensdf
+*.sdf
+*.db
+*.log
+*.vs/
