@@ -1,327 +1,85 @@
-#include <GL/glut.h>
-#include <iostream>
+Ôªø#include <GL/glut.h>
+#include "road.h"
+#include "trafficlights.h"
+#include "pedestrianlights.h"
+#include "camera.h"
+#include "utils.h"
 #include <cmath>
+#include <corecrt_math.h>
 
-struct TrafficLightState {
-    bool red, yellow, green;
-};
+void mouse(int button, int state, int x, int y) {
+    if (button != GLUT_LEFT_BUTTON || state != GLUT_DOWN)
+        return;
 
-struct PedestrianLightState {
-    bool red, green;
-};
+    // Pobierz macierze i viewport
+    GLint viewport[4];
+    GLdouble modelview[16], projection[16];
+    glGetDoublev(GL_MODELVIEW_MATRIX, modelview);
+    glGetDoublev(GL_PROJECTION_MATRIX, projection);
+    glGetIntegerv(GL_VIEWPORT, viewport);
 
-TrafficLightState lights[4] = {
-    {true, false, false},
-    {false, false, true},
-    {true, false, false},
-    {false, false, true},
-};
+    // Przelicz wsp√≥≈Çrzƒôdne ekranu na ≈õwiat na wysoko≈õci przycisku (y = 1.0f)
+    float winX = (float)x;
+    float winY = (float)viewport[3] - (float)y;
 
-PedestrianLightState pedestrianLights[8] = {
-    {true, false}, {true, false}, {true, false}, {true, false},
-    {true, false}, {true, false}, {true, false}, {true, false}
-};
+    // Rzutuj dwa punkty: na bliskiej i dalekiej p≈Çaszczy≈∫nie
+    GLdouble pos1[3], pos2[3];
+    gluUnProject(winX, winY, 0.0, modelview, projection, viewport, &pos1[0], &pos1[1], &pos1[2]);
+    gluUnProject(winX, winY, 1.0, modelview, projection, viewport, &pos2[0], &pos2[1], &pos2[2]);
 
-int currentPhase = 0;
-float cameraAngle = 0.0f;
-float cameraHeight = 10.0f;
-float cameraDistance = 20.0f;
-bool autoRotate = false;
-float rotationSpeed = 0.01f;
+    // Wyznacz parametry promienia
+    double t = (1.0 - pos1[1]) / (pos2[1] - pos1[1]); // y=1.0f
+    double clickX = pos1[0] + t * (pos2[0] - pos1[0]);
+    double clickZ = pos1[2] + t * (pos2[2] - pos1[2]);
 
-// Tekstury (symulowane przez kolory)
-struct RoadTexture {
-    float r, g, b;
-};
+    // Pozycje przycisk√≥w (prawy bok s≈Çupka)
+    struct Button {
+        float x, z, rot;
+    } buttons[8] = {
+        {-6.0f + 0.09f, -12.8f, 90.0f},
+        {6.0f + 0.09f, -12.8f, -90.0f},
+        {-6.0f + 0.09f, 12.8f, 90.0f},
+        {6.0f + 0.09f, 12.8f, -90.0f},
+        {-12.8f + 0.09f, -6.0f, 0.0f},
+        {-12.8f + 0.09f, 6.0f, 180.0f},
+        {12.8f + 0.09f, -6.0f, 0.0f},
+        {12.8f + 0.09f, 6.0f, 180.0f}
+    };
 
-RoadTexture asphaltTexture = { 0.2f, 0.2f, 0.2f };
-RoadTexture lineTexture = { 1.0f, 1.0f, 0.8f };
-RoadTexture sidewalkTexture = { 0.6f, 0.6f, 0.6f };
+    // Sprawd≈∫ klikniƒôcie dla ka≈ºdego przycisku z wiƒôkszym obszarem
+    for (int i = 0; i < 8; ++i) {
+        float bx = buttons[i].x;
+        float bz = buttons[i].z;
+        // Zwiƒôkszony obszar klikniƒôcia z 0.12f na 0.18f (odpowiada wiƒôkszemu przyciskowi)
+        if (std::fabs(clickX - bx) < 0.18f && std::fabs(clickZ - bz) < 0.18f) {
+            // Znajd≈∫ parƒô dla tego przycisku
+            int pair;
+            if (i < 4) {
+                // Przej≈õcia N/S: 0‚Üî1, 2‚Üî3
+                pair = (i % 2 == 0) ? i + 1 : i - 1;
+            }
+            else {
+                // Przej≈õcia E/W: 4‚Üî5, 6‚Üî7
+                pair = (i % 2 == 0) ? i + 1 : i - 1;
+            }
 
-void drawBox(float w, float h, float d) {
-    glPushMatrix();
-    glScalef(w, h, d);
-    glutSolidCube(1.0);
-    glPopMatrix();
-}
+            // Aktywuj ≈ºƒÖdanie dla obu sygnalizator√≥w w parze
+            pedestrianRequest[i] = true;
+            pedestrianRequest[pair] = true;
 
-void drawTexturedQuad(float w, float h, RoadTexture tex) {
-    glColor3f(tex.r, tex.g, tex.b);
-    glBegin(GL_QUADS);
-    glNormal3f(0.0f, 1.0f, 0.0f);
-    glVertex3f(-w / 2, 0.0f, -h / 2);
-    glVertex3f(w / 2, 0.0f, -h / 2);
-    glVertex3f(w / 2, 0.0f, h / 2);
-    glVertex3f(-w / 2, 0.0f, h / 2);
-    glEnd();
-}
-
-void drawRoadSegment(float x, float z, float width, float length, RoadTexture tex) {
-    glPushMatrix();
-    glTranslatef(x, 0.01f, z); // Lekko ponad ziemiπ
-    drawTexturedQuad(width, length, tex);
-    glPopMatrix();
-}
-
-void drawRoadLine(float x, float z, float width, float length, bool horizontal = true) {
-    glPushMatrix();
-    glTranslatef(x, 0.02f, z); // Jeszcze wyøej niø droga
-    if (horizontal) {
-        drawTexturedQuad(length, width, lineTexture);
-    }
-    else {
-        drawTexturedQuad(width, length, lineTexture);
-    }
-    glPopMatrix();
-}
-
-void drawCompleteRoad() {
-    // G≥Ûwna droga pozioma (wschÛd-zachÛd)
-    drawRoadSegment(0.0f, 0.0f, 50.0f, 8.0f, asphaltTexture);
-
-    // G≥Ûwna droga pionowa (pÛ≥noc-po≥udnie)
-    drawRoadSegment(0.0f, 0.0f, 8.0f, 50.0f, asphaltTexture);
-
-    // Przejúcia dla pieszych (pasy) - na kaødej drodze
-    for (int i = 0; i < 5; i++) {
-        float offset = -3.2f + i * 1.6f; // 5 pasÛw na szerokoúci 4m
-
-        // Pasy na drodze pÛ≥nocnej (przed skrzyøowaniem)
-        drawRoadLine(offset, -12.0f, 0.3f, 2.0f, false);
-        // Pasy na drodze po≥udniowej (przed skrzyøowaniem)  
-        drawRoadLine(offset, 12.0f, 0.3f, 2.0f, false);
-        // Pasy na drodze wschodniej (przed skrzyøowaniem)
-        drawRoadLine(-12.0f, offset, 0.3f, 2.0f, true); // Zmieniono na horizontal = true
-        // Pasy na drodze zachodniej (przed skrzyøowaniem)
-        drawRoadLine(12.0f, offset, 0.3f, 2.0f, true);  // Zmieniono na horizontal = true
+            glutPostRedisplay();
+            break;
+        }
     }
 }
 
-void drawSingleTrafficLight(float x, float z, float rotationY, TrafficLightState state) {
-    glPushMatrix();
-    glTranslatef(x, 0.0f, z);
-    glRotatef(rotationY, 0.0f, 1.0f, 0.0f);
 
-    // S≥upek
-    glColor3f(0.2f, 0.2f, 0.2f);
-    glPushMatrix();
-    glTranslatef(0.0f, 2.5f, 0.0f);
-    drawBox(0.3f, 5.0f, 0.3f);
-    glPopMatrix();
-
-    // Obudowa úwiate≥
-    glColor3f(0.1f, 0.1f, 0.1f);
-    glPushMatrix();
-    glTranslatef(0.0f, 5.5f, 0.0f);
-    drawBox(1.0f, 3.0f, 1.0f);
-    glPopMatrix();
-
-    // åwiat≥a z efektem úwiecenia
-    glPushMatrix();
-    glTranslatef(0.0f, 6.5f, 0.6f);
-
-    // Czerwone úwiat≥o
-    if (state.red)
-        glColor3f(1.0f, 0.0f, 0.0f); // jasna czerwieÒ
-    else
-        glColor3f(0.3f, 0.0f, 0.0f); // ciemna czerwieÒ
-    glutSolidSphere(0.3, 20, 20);
-
-    glTranslatef(0.0f, -1.0f, 0.0f);
-
-    // ØÛ≥te úwiat≥o
-    if (state.yellow)
-        glColor3f(1.0f, 1.0f, 0.0f); // jasny øÛ≥ty
-    else
-        glColor3f(0.3f, 0.3f, 0.0f); // ciemny øÛ≥ty
-    glutSolidSphere(0.3, 20, 20);
-
-    glTranslatef(0.0f, -1.0f, 0.0f);
-
-    // Zielone úwiat≥o
-    if (state.green)
-        glColor3f(0.0f, 1.0f, 0.0f); // jasna zieleÒ
-    else
-        glColor3f(0.0f, 0.3f, 0.0f); // ciemna zieleÒ
-    glutSolidSphere(0.3, 20, 20);
-
-    glPopMatrix();
-    glPopMatrix();
-}
-
-void drawAllTrafficLights() {
-    drawSingleTrafficLight(-5.0f, -5.0f, 180.0f, lights[0]);   // pÛ≥nocno-zachodni (patrzy na po≥udnie)
-    drawSingleTrafficLight(5.0f, -5.0f, 90.0f, lights[1]);    // pÛ≥nocno-wschodni (patrzy na zachÛd)
-    drawSingleTrafficLight(5.0f, 5.0f, 0.0f, lights[2]);       // po≥udniowo-wschodni (patrzy na pÛ≥noc)
-    drawSingleTrafficLight(-5.0f, 5.0f, 270.0f, lights[3]);     // po≥udniowo-zachodni (patrzy na wschÛd)
-}
-
-
-void drawPedestrianLight(float x, float z, float rotationY, PedestrianLightState state) {
-    glPushMatrix();
-    glTranslatef(x, 0.0f, z);
-    glRotatef(rotationY, 0.0f, 1.0f, 0.0f);
-
-    // S≥upek
-    glColor3f(0.2f, 0.2f, 0.2f);
-    glPushMatrix();
-    glTranslatef(0.0f, 1.2f, 0.0f);
-    drawBox(0.15f, 2.4f, 0.15f);
-    glPopMatrix();
-
-    // Obudowa úwiate≥
-    glColor3f(0.1f, 0.1f, 0.1f);
-    glPushMatrix();
-    glTranslatef(0.0f, 2.6f, 0.0f);
-    drawBox(0.4f, 0.8f, 0.4f);
-    glPopMatrix();
-
-    // åwiat≥a
-    glPushMatrix();
-    glTranslatef(0.0f, 2.7f, 0.22f);
-
-    // Czerwone úwiat≥o
-    if (state.red)
-        glColor3f(1.0f, 0.0f, 0.0f);
-    else
-        glColor3f(0.3f, 0.0f, 0.0f);
-    glutSolidSphere(0.13, 16, 16);
-
-    // Zielone úwiat≥o
-    glTranslatef(0.0f, -0.3f, 0.0f);
-    if (state.green)
-        glColor3f(0.0f, 1.0f, 0.0f);
-    else
-        glColor3f(0.0f, 0.3f, 0.0f);
-    glutSolidSphere(0.13, 16, 16);
-
-    glPopMatrix();
-
-    // Kwadratowy przycisk
-    glPushMatrix();
-    glTranslatef(0.0f, 1.0f, 0.1f); // na froncie s≥upka, lekko wystaje
-    glColor3f(0.8f, 0.8f, 0.2f);
-    drawBox(0.18f, 0.18f, 0.05f); // szerokoúÊ i wysokoúÊ wiÍksza niø s≥upek, g≥ÍbokoúÊ niewielka
-    glPopMatrix();
-
-    glPopMatrix();
-}
-
-//void drawAllPedestrianLights() {
-//    PedestrianLightState pedRed = { true, false };
-//    PedestrianLightState pedGreen = { false, true };
-//
-//    // Przejúcie pÛ≥nocne (na koÒcu pasÛw)
-//    drawPedestrianLight(-6.0f, -12.8f, 90.0f, pedRed);
-//    drawPedestrianLight(6.0f, -12.8f, -90.0f, pedRed);
-//
-//    // Przejúcie po≥udniowe
-//    drawPedestrianLight(-6.0f, 12.8f, 90.0f, pedRed);
-//    drawPedestrianLight(6.0f, 12.8f, -90.0f, pedRed);
-//
-//    // Przejúcie zachodnie
-//    drawPedestrianLight(-12.8f, -6.0f, 0.0f, pedRed);
-//    drawPedestrianLight(-12.8f, 6.0f, 180.0f, pedRed);
-//
-//    // Przejúcie wschodnie
-//    drawPedestrianLight(12.8f, -6.0f, 0.0f, pedRed);
-//    drawPedestrianLight(12.8f, 6.0f, 180.0f, pedRed);
-//}
-
-void drawAllPedestrianLights() {
-    // Przejúcie pÛ≥nocne (na koÒcu pasÛw)
-    drawPedestrianLight(-6.0f, -12.8f, 90.0f, pedestrianLights[0]);
-    drawPedestrianLight(6.0f, -12.8f, -90.0f, pedestrianLights[1]);
-
-    // Przejúcie po≥udniowe
-    drawPedestrianLight(-6.0f, 12.8f, 90.0f, pedestrianLights[2]);
-    drawPedestrianLight(6.0f, 12.8f, -90.0f, pedestrianLights[3]);
-
-    // Przejúcie zachodnie
-    drawPedestrianLight(-12.8f, -6.0f, 0.0f, pedestrianLights[4]);
-    drawPedestrianLight(-12.8f, 6.0f, 180.0f, pedestrianLights[5]);
-
-    // Przejúcie wschodnie
-    drawPedestrianLight(12.8f, -6.0f, 0.0f, pedestrianLights[6]);
-    drawPedestrianLight(12.8f, 6.0f, 180.0f, pedestrianLights[7]);
-}
-
-void updateLights(int value) {
-    currentPhase = (currentPhase + 1) % 6;
-
-    switch (currentPhase) {
-    case 0:
-        // Faza A: N/S zielone, E/W czerwone
-        lights[0] = lights[2] = { false, false, true };   // N/S
-        lights[1] = lights[3] = { true, false, false };   // E/W
-        glutTimerFunc(6000, updateLights, 0); // 2 sek
-        break;
-    case 1:
-        // Faza B: N/S øÛ≥te
-        lights[0] = lights[2] = { false, true, false };   // N/S
-        glutTimerFunc(2000, updateLights, 0); // 1 sek
-        break;
-    case 2:
-        // Faza C: N/S czerwone, E/W czerwono-øÛ≥te
-        lights[0] = lights[2] = { true, false, false };   // N/S
-        lights[1] = lights[3] = { true, true, false };    // E/W
-        glutTimerFunc(2000, updateLights, 0); // 1 sek
-        break;
-    case 3:
-        // Faza D: E/W zielone, N/S czerwone
-        lights[1] = lights[3] = { false, false, true };   // E/W
-        lights[0] = lights[2] = { true, false, false };   // N/S
-        glutTimerFunc(6000, updateLights, 0); // 2 sek
-        break;
-    case 4:
-        // Faza E: E/W øÛ≥te
-        lights[1] = lights[3] = { false, true, false };   // E/W
-        glutTimerFunc(2000, updateLights, 0); // 1 sek
-        break;
-    case 5:
-        // Faza F: E/W czerwone, N/S czerwono-øÛ≥te
-        lights[1] = lights[3] = { true, false, false };   // E/W
-        lights[0] = lights[2] = { true, true, false };    // N/S
-        glutTimerFunc(2000, updateLights, 0); // 1 sek
-        break;
-    }
-
-    glutPostRedisplay();
-}
-
-
-void setupLighting() {
-    glEnable(GL_LIGHTING);
-
-    // G≥Ûwne ürÛd≥o úwiat≥a (s≥oÒce)
-    glEnable(GL_LIGHT0);
-    GLfloat lightPos0[] = { 5.0f, 15.0f, 5.0f, 1.0f };
-    GLfloat lightDiffuse0[] = { 0.8f, 0.8f, 0.7f, 1.0f };
-    GLfloat lightAmb0[] = { 0.2f, 0.2f, 0.2f, 1.0f };
-    glLightfv(GL_LIGHT0, GL_POSITION, lightPos0);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE, lightDiffuse0);
-    glLightfv(GL_LIGHT0, GL_AMBIENT, lightAmb0);
-
-    // Drugie ürÛd≥o úwiat≥a (latarnia uliczna)
-    glEnable(GL_LIGHT1);
-    GLfloat lightPos1[] = { -8.0f, 12.0f, -8.0f, 1.0f };
-    GLfloat lightDiffuse1[] = { 0.9f, 0.8f, 0.6f, 1.0f };
-    GLfloat lightAmb1[] = { 0.1f, 0.1f, 0.1f, 1.0f };
-    glLightfv(GL_LIGHT1, GL_POSITION, lightPos1);
-    glLightfv(GL_LIGHT1, GL_DIFFUSE, lightDiffuse1);
-    glLightfv(GL_LIGHT1, GL_AMBIENT, lightAmb1);
-
-    glEnable(GL_COLOR_MATERIAL);
-    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-}
-
+// Funkcja wy≈õwietlania sceny
 void display() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glLoadIdentity();
 
-    if (autoRotate) {
-        cameraAngle += rotationSpeed;
-    }
+    updateCamera();
 
     float camX = cameraDistance * sinf(cameraAngle);
     float camZ = cameraDistance * cosf(cameraAngle);
@@ -334,64 +92,17 @@ void display() {
     glutSwapBuffers();
 }
 
-void reshape(int w, int h) {
-    glViewport(0, 0, w, h);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(45.0, (float)w / h, 1.0, 100.0);
-    glMatrixMode(GL_MODELVIEW);
-}
-
+// Obs≈Çuga klawiatury (kamera + ≈õwiat≈Ça)
 void keyboard(unsigned char key, int, int) {
-    switch (key) {
-    case 27: // ESC
+    if (key == 27) { // ESC
         exit(0);
-        break;
-    case 'a':
-    case 'A':
-        cameraAngle -= 0.1f;
-        glutPostRedisplay();
-        break;
-    case 'd':
-    case 'D':
-        cameraAngle += 0.1f;
-        glutPostRedisplay();
-        break;
-    case 'w':
-    case 'W':
-        cameraHeight += 0.5f;
-        glutPostRedisplay();
-        break;
-    case 's':
-    case 'S':
-        cameraHeight -= 0.5f;
-        if (cameraHeight < 2.0f) cameraHeight = 2.0f;
-        glutPostRedisplay();
-        break;
-    case 'q':
-    case 'Q':
-        cameraDistance -= 1.0f;
-        if (cameraDistance < 5.0f) cameraDistance = 5.0f;
-        glutPostRedisplay();
-        break;
-    case 'e':
-    case 'E':
-        cameraDistance += 1.0f;
-        if (cameraDistance > 50.0f) cameraDistance = 50.0f;
-        glutPostRedisplay();
-        break;
-    case 'r':
-    case 'R':
-        autoRotate = !autoRotate;
-        break;
-    case '+':
-        rotationSpeed += 0.005f;
-        if (rotationSpeed > 0.1f) rotationSpeed = 0.1f;
-        break;
-    case '-':
-        rotationSpeed -= 0.005f;
-        if (rotationSpeed < 0.001f) rotationSpeed = 0.001f;
-        break;
+    }
+
+    // Kamera
+    handleCameraKeyboard(key);
+
+    // ≈öwiat≈Ça drogowe (przyk≈Çad: 1-4)
+    switch (key) {
     case '1':
         currentPhase = 0;
         for (int i = 0; i < 4; ++i)
@@ -416,99 +127,35 @@ void keyboard(unsigned char key, int, int) {
             lights[i] = { false, true, false };
         glutPostRedisplay();
         break;
-
-    }
-}
-
-void setPedestrianRed(int idx) {
-    int pair = idx ^ 1; 
-    pedestrianLights[idx] = { true, false };
-    pedestrianLights[pair] = { true, false };
-    glutPostRedisplay();
-}
-
-void mouse(int button, int state, int x, int y) {
-    if (button != GLUT_LEFT_BUTTON || state != GLUT_DOWN)
-        return;
-
-    // Pobierz macierze i viewport
-    GLint viewport[4];
-    GLdouble modelview[16], projection[16];
-    glGetDoublev(GL_MODELVIEW_MATRIX, modelview);
-    glGetDoublev(GL_PROJECTION_MATRIX, projection);
-    glGetIntegerv(GL_VIEWPORT, viewport);
-
-    // Przelicz wspÛ≥rzÍdne ekranu na úwiat na wysokoúci przycisku (y = 1.0f)
-    float winX = (float)x;
-    float winY = (float)viewport[3] - (float)y;
-
-    // Rzutuj dwa punkty: na bliskiej i dalekiej p≥aszczyünie
-    GLdouble pos1[3], pos2[3];
-    gluUnProject(winX, winY, 0.0, modelview, projection, viewport, &pos1[0], &pos1[1], &pos1[2]);
-    gluUnProject(winX, winY, 1.0, modelview, projection, viewport, &pos2[0], &pos2[1], &pos2[2]);
-
-    // Wyznacz parametry promienia
-    double t = (1.0 - pos1[1]) / (pos2[1] - pos1[1]); // y=1.0f
-    double clickX = pos1[0] + t * (pos2[0] - pos1[0]);
-    double clickZ = pos1[2] + t * (pos2[2] - pos1[2]);
-
-    // Pozycje przyciskÛw (prawy bok s≥upka)
-    struct Button {
-        float x, z, rot;
-    } buttons[8] = {
-        {-6.0f + 0.09f, -12.8f, 90.0f},
-        {6.0f + 0.09f, -12.8f, -90.0f},
-        {-6.0f + 0.09f, 12.8f, 90.0f},
-        {6.0f + 0.09f, 12.8f, -90.0f},
-        {-12.8f + 0.09f, -6.0f, 0.0f},
-        {-12.8f + 0.09f, 6.0f, 180.0f},
-        {12.8f + 0.09f, -6.0f, 0.0f},
-        {12.8f + 0.09f, 6.0f, 180.0f}
-    };
-
-    for (int i = 0; i < 8; ++i) {
-        float bx = buttons[i].x;
-        float bz = buttons[i].z;
-        if (std::abs(clickX - bx) < 0.12f && std::abs(clickZ - bz) < 0.12f) {
-            int pair = i ^ 1; 
-            pedestrianLights[i] = { false, true };
-            pedestrianLights[pair] = { false, true };
-            glutTimerFunc(3000, [](int idx) { setPedestrianRed(idx); }, i);
-            glutPostRedisplay();
-            break;
-        }
-    }
-}
-
-
-void printControls() {
-    std::cout << "\n=== STEROWANIE SYGNALIZACJ• åWIETLN• 3D ===" << std::endl;
-    std::cout << "KAMERA:" << std::endl;
-    std::cout << "  A/D - obracanie kamery w lewo/prawo" << std::endl;
-    std::cout << "  W/S - kamera w gÛrÍ/dÛ≥" << std::endl;
-    std::cout << "  Q/E - przybliøanie/oddalanie kamery" << std::endl;
-    std::cout << "  R   - automatyczne obracanie kamery ON/OFF" << std::endl;
-    std::cout << "  +/- - szybkoúÊ automatycznego obracania" << std::endl;
-    std::cout << "\nåWIAT£A:" << std::endl;
-    std::cout << "  1   - Faza 1 (PÛ≥noc-Po≥udnie: STOP, WschÛd-ZachÛd: JEDè)" << std::endl;
-    std::cout << "  2   - Faza 2 (Wszystkie: UWAGA)" << std::endl;
-    std::cout << "  3   - Faza 3 (PÛ≥noc-Po≥udnie: JEDè, WschÛd-ZachÛd: STOP)" << std::endl;
-    std::cout << "\n  ESC - wyjúcie z programu" << std::endl;
-    std::cout << "========================================\n" << std::endl;
-}
-
-void idle() {
-    if (autoRotate) {
+    case '5': // Przej≈õcie p√≥≈Çnocne (0 i 1)
+        pedestrianRequest[0] = true;
+        pedestrianRequest[1] = true;
         glutPostRedisplay();
+        break;
+    case '6': // Przej≈õcie po≈Çudniowe (2 i 3)
+        pedestrianRequest[2] = true;
+        pedestrianRequest[3] = true;
+        glutPostRedisplay();
+        break;
+    case '7': // Przej≈õcie zachodnie (4 i 5)
+        pedestrianRequest[4] = true;
+        pedestrianRequest[5] = true;
+        glutPostRedisplay();
+        break;
+    case '8': // Przej≈õcie wschodnie (6 i 7)
+        pedestrianRequest[6] = true;
+        pedestrianRequest[7] = true;
+        glutPostRedisplay();
+        break;
     }
 }
 
+// Inicjalizacja OpenGL i sceny
 void init() {
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.1f, 0.2f, 0.3f, 1.0f); // Ciemnoniebieski jak wieczorne niebo
     setupLighting();
 
-    // W≥πczenie mieszania kolorÛw dla efektÛw transparencji
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -525,9 +172,10 @@ int main(int argc, char** argv) {
 
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
+
     glutKeyboardFunc(keyboard);
     glutMouseFunc(mouse);
-    glutIdleFunc(idle);
+
     glutTimerFunc(0, updateLights, 0);
 
     glutMainLoop();
