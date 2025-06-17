@@ -84,18 +84,20 @@ void updateLights(int value) {
             if (pedestrianRequest[i]) {
                 // Parowanie sygnalizatorów: 4-5, 6-7
                 int pair = (i % 2 == 0) ? i + 1 : i - 1;
-                pedestrianLights[i] = { false, true }; // zielone dla pieszych
-                pedestrianLights[pair] = { false, true }; // zielone dla pary
+                pedestrianLights[i] = { false, true, false }; // zielone dla pieszych
+                pedestrianLights[pair] = { false, true, false }; // zielone dla pary
                 pedestrianRequest[i] = false;
                 pedestrianRequest[pair] = false;
-                glutTimerFunc(6000, [](int idx) { setPedestrianRed(idx); }, i);
+
+                // Po 3 sekundach rozpocznij miganie (3s migania + przejœcie na czerwone)
+                glutTimerFunc(4000, [](int idx) { startPedestrianBlinking(idx); }, i);
             }
         }
 
         // Pozosta³e sygnalizatory pieszych maj¹ czerwone
         for (int i = 0; i < 8; ++i) {
             if (!pedestrianLights[i].green) {
-                pedestrianLights[i] = { true, false };
+                pedestrianLights[i] = { true, false, false };
             }
         }
 
@@ -125,18 +127,20 @@ void updateLights(int value) {
             if (pedestrianRequest[i]) {
                 // Parowanie sygnalizatorów: 0-1, 2-3
                 int pair = (i % 2 == 0) ? i + 1 : i - 1;
-                pedestrianLights[i] = { false, true }; // zielone dla pieszych
-                pedestrianLights[pair] = { false, true }; // zielone dla pary
+                pedestrianLights[i] = { false, true, false }; // zielone dla pieszych
+                pedestrianLights[pair] = { false, true, false }; // zielone dla pary
                 pedestrianRequest[i] = false;
                 pedestrianRequest[pair] = false;
-                glutTimerFunc(6000, [](int idx) { setPedestrianRed(idx); }, i);
+
+                // Po 3 sekundach rozpocznij miganie
+                glutTimerFunc(4000, [](int idx) { startPedestrianBlinking(idx); }, i);
             }
         }
 
         // Pozosta³e sygnalizatory pieszych maj¹ czerwone
         for (int i = 0; i < 8; ++i) {
             if (!pedestrianLights[i].green) {
-                pedestrianLights[i] = { true, false };
+                pedestrianLights[i] = { true, false, false };
             }
         }
 
